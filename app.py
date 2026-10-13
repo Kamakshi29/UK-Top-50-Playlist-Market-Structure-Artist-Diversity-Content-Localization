@@ -9,6 +9,7 @@ Expects the cleaned dataset at ./data/Atlantic_UK_Top50_CLEANED.csv
 import ast
 import itertools
 from collections import Counter
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -25,7 +26,38 @@ st.set_page_config(
     layout="wide",
 )
 
-DATA_PATH = "data/Atlantic_UK_Top50_CLEANED.csv"
+DATA_NAME = "Atlantic_UK_Top50_CLEANED.csv"
+
+try:
+    _NEW_ST = tuple(int(x) for x in st.__version__.split(".")[:2]) >= (1, 50)
+except Exception:
+    _NEW_ST = False
+
+
+def show_chart(fig):
+    """Works on both older and newer Streamlit versions."""
+    st.plotly_chart(fig, **({"width": "stretch"} if _NEW_ST else {"use_container_width": True}))
+
+
+def show_table(d):
+    st.dataframe(d, hide_index=True, **({"width": "stretch"} if _NEW_ST else {"use_container_width": True}))
+
+
+def find_data():
+    """Look next to app.py first (not just the working directory, which differs on Streamlit Cloud)."""
+    here = Path(__file__).resolve().parent
+    candidates = [
+        here / "data" / DATA_NAME, here / DATA_NAME, here.parent / "data" / DATA_NAME,
+        Path.cwd() / "data" / DATA_NAME, Path.cwd() / DATA_NAME,
+    ]
+    for p in candidates:
+        if p.exists():
+            return p, candidates
+    for base in (here, Path.cwd()):
+        hit = next(base.rglob(DATA_NAME), None)
+        if hit:
+            return hit, candidates
+    return None, candidates
 
 
 # ----------------------------------------------------------------------------
@@ -50,7 +82,18 @@ def load_data(path: str) -> pd.DataFrame:
     return df
 
 
-df_all = load_data(DATA_PATH)
+_data_file, _tried = find_data()
+if _data_file is None:
+    st.error(
+        f"Could not find **{DATA_NAME}**. Put it in a folder called `data` next to `app.py` in your repo. "
+        "Places I looked:\n\n" + "\n".join(f"- `{p}`" for p in _tried)
+    )
+    st.stop()
+try:
+    df_all = load_data(str(_data_file))
+except Exception as e:
+    st.error(f"Found the data file at `{_data_file}` but could not read it: {type(e).__name__}: {e}")
+    st.stop()
 
 # ----------------------------------------------------------------------------
 # Sidebar — User Capabilities (filters)
@@ -169,7 +212,7 @@ with tab1:
         title=f"Top {top_n} Artists by Chart Appearances",
     )
     fig.update_layout(height=max(400, top_n * 24))
-    st.plotly_chart(fig, width='stretch')
+    show_chart(fig)
 
     per_day_unique = exploded.groupby("chart_date")["artist_atom"].nunique()
     st.caption(
@@ -231,9 +274,9 @@ with tab2:
             showlegend=False, height=650,
             xaxis=dict(visible=False), yaxis=dict(visible=False),
         )
-        st.plotly_chart(net_fig, width='stretch')
+        show_chart(net_fig)
 
-        st.dataframe(pairs_df, width='stretch', hide_index=True)
+        show_table(pairs_df)
 
         avg_collab = df.loc[df["is_collab"], "n_artists"].mean()
         st.caption(f"Average collaborators per collaborative track: **{avg_collab:.2f}**")
@@ -249,13 +292,13 @@ with tab3:
         pie_df = df["is_explicit"].map({True: "Explicit", False: "Clean"}).value_counts().reset_index()
         pie_df.columns = ["Content Type", "Entries"]
         fig_pie = px.pie(pie_df, names="Content Type", values="Entries", title="Overall Explicit vs. Clean Share")
-        st.plotly_chart(fig_pie, width='stretch')
+        show_chart(fig_pie)
 
     with col_b:
         rank_explicit = (df.groupby("rank_group")["is_explicit"].mean() * 100).reset_index()
         rank_explicit.columns = ["Rank Group", "Explicit %"]
         fig_rank = px.bar(rank_explicit, x="Rank Group", y="Explicit %", title="Explicit Share by Rank Group")
-        st.plotly_chart(fig_rank, width='stretch')
+        show_chart(fig_rank)
 
     pos_bucket = pd.cut(df["position"], bins=[0, 10, 20, 30, 40, 50],
                          labels=["1-10", "11-20", "21-30", "31-40", "41-50"])
@@ -263,7 +306,7 @@ with tab3:
     pos_explicit.columns = ["Position Bucket", "Explicit %"]
     fig_pos = px.line(pos_explicit, x="Position Bucket", y="Explicit %", markers=True,
                        title="Explicit Content Share by Chart Position")
-    st.plotly_chart(fig_pos, width='stretch')
+    show_chart(fig_pos)
 
 # ----------------------------------------------------------------------------
 # Module 4 — Album Type Distribution
@@ -276,11 +319,11 @@ with tab4:
         type_counts = df["album_type"].value_counts().reset_index()
         type_counts.columns = ["Album Type", "Entries"]
         fig_type = px.bar(type_counts, x="Album Type", y="Entries", title="Release Format Distribution")
-        st.plotly_chart(fig_type, width='stretch')
+        show_chart(fig_type)
 
     with col_b:
         fig_tracks = px.box(df, x="album_type", y="total_tracks", title="Album Size (total_tracks) by Release Type")
-        st.plotly_chart(fig_tracks, width='stretch')
+        show_chart(fig_tracks)
 
     multitrack_singles = int(df["single_multitrack_flag"].sum())
     st.caption(
@@ -299,14 +342,14 @@ with tab5:
         dur_counts = df["duration_bucket"].value_counts().sort_index().reset_index()
         dur_counts.columns = ["Duration Bucket", "Entries"]
         fig_dur = px.bar(dur_counts, x="Duration Bucket", y="Entries", title="Track Duration Distribution")
-        st.plotly_chart(fig_dur, width='stretch')
+        show_chart(fig_dur)
 
     with col_b:
         dur_pop = df.groupby("duration_bucket", observed=True)["popularity_clean"].mean().reset_index()
         dur_pop.columns = ["Duration Bucket", "Avg Popularity"]
         fig_dp = px.bar(dur_pop, x="Duration Bucket", y="Avg Popularity", title="Avg Popularity by Duration Bucket")
         fig_dp.update_yaxes(range=[dur_pop["Avg Popularity"].min() - 5, dur_pop["Avg Popularity"].max() + 5])
-        st.plotly_chart(fig_dp, width='stretch')
+        show_chart(fig_dp)
 
     skit_n = int(df["is_likely_skit"].sum())
     st.caption(
